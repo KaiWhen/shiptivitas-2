@@ -127,7 +127,64 @@ app.put('/api/v1/clients/:id', (req, res) => {
 
   /* ---------- Update code below ----------*/
 
+  let lowerPrioTargetClients = clients.filter(c => c.status === status && c.priority >= priority);
+  let lowerPrioSourceClients = clients.filter(c => c.status === client.status && c.priority > client.priority);
+  let targetClients = clients.filter(c => c.status === status).sort((a,b) => a.priority - b.priority);
 
+  const updatePrio = db.prepare('update clients set priority = ? where id = ?');
+
+  if (status) {
+    if (status !== 'backlog' && status !== 'in-progress' && status !== 'complete') {
+      return res.status(400).send({
+        'message': 'Invalid status provided.',
+        'long_message': 'Status can only be one of the following: [backlog | in-progress | complete].',
+      });
+    }
+
+    if (priority && status !== client.status && priority !== client.priority) {
+      const update = db.prepare('update clients set status = ?, priority = ? where id = ?');
+      update.run(status, priority, client.id);
+
+      lowerPrioTargetClients.forEach(c => {
+        updatePrio.run(parseInt(c.priority) + 1, c.id);
+      });
+    }
+    else if (!priority && status !== client.status) {
+      const update = db.prepare('update clients set status = ? where id = ?');
+      update.run(status, client.id);
+
+      if (targetClients.length > 0) {
+        const lowestTargetPrio = targetClients[targetClients.length - 1];
+        updatePrio.run(parseInt(lowestTargetPrio.priority) + 1, client.id);
+      }
+      else {
+        updatePrio.run(1, client.id);
+      }
+    }
+
+    lowerPrioSourceClients.forEach(c => {
+      updatePrio.run(parseInt(c.priority) - 1, c.id);
+    });
+    
+  }
+  else if (priority && !status && priority !== client.priority) {
+    updatePrio.run(priority, client.id);
+
+    let prioritiesToChange = null;
+    let change = 1;
+    if (priority < client.priority)
+      prioritiesToChange = clients.filter(c => c.status === client.status && c.priority < client.priority && c.priority >= priority);
+    else {
+      prioritiesToChange = clients.filter(c => c.status === client.status && c.priority > client.priority);
+      change = -1;
+    }
+
+    prioritiesToChange.forEach(c => {
+      updatePrio.run(c.priority + change, c.id);
+    });
+  }
+
+  clients = db.prepare('select * from clients').all();
 
   return res.status(200).send(clients);
 });
